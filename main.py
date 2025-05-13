@@ -198,7 +198,7 @@ class VFS:
 
         for mount_path in self.mount_points:
             mount_dir = os.path.dirname(mount_path)
-            if mount_dir == self.current_path.rstrip("/")
+            if mount_dir == self.current_path.rstrip("/"):
                 items.append(f"{os.path.basename(mount_path)}/ [mounted]")
 
         return items
@@ -221,7 +221,7 @@ class VFS:
         for component in components[:-1]:
             child = current.get_child(component)
             if not isinstance(child, Directory):
-
+                pass
 
 
 
