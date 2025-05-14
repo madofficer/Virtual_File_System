@@ -1,3 +1,4 @@
+import json
 import os
 from datetime import datetime
 from typing import List
@@ -82,6 +83,9 @@ class Directory:
     def list_children(self) -> List[str]:
         return list(self.children.keys())
 
+    def repr(self):
+        return self.name
+
 
 class VFS:
     def __init__(self):
@@ -90,18 +94,48 @@ class VFS:
         self.current_path = "/"
         self.mount_points = {}
 
-    def run(self, args) -> None:
-        print(args.command)
-        match args.command:
-            case "cd":
-                self.cd(args.route)
-        # TODO write all cases
+    def run(self) -> None:
+        print("Virtual File System. Type '--help' for commands")
+        try:
+            while True:
+                parser = cli()
+                prompt = input(self.upd_prompt()).strip()
+                if not prompt:
+                    continue
+
+                try:
+                    args = parser.parse_args(prompt.split())
+                except SystemExit:
+                    continue
+
+                match args.command:
+                    case "cd":
+                        self.cd(args.path)
+                    case "mkdir":
+                        self.mkdir(args.dir_name)
+                    case "mount":
+                        self.mount(args.source, args.target)
+                    case "unmount":
+                        self.unmount(args.mounted_path)
+                    case "dir" | "ls":
+                        self.dir()
+                    case "touch":
+                        self.touch(args.file_name, args.content)
+                    case "save":
+                        self.save_to_file(args.file_name)
+                    case "load":
+                        self.load_from_file(args.file_name)
+
+        except KeyboardInterrupt:
+            print("vfs killed")
+        except Exception as err:
+            print(f"Exception raised [{err}]")
 
     def _resolve_path(self, path):
-        path = path.replace("\\", "/")
+        path = path.replace("\\", "/").strip()
         if not path.startswith("/"):
             path = os.path.join(self.current_path, path)
-        return os.path.normpath(path) + "/"
+        return path + "/"
 
     def _find_dir(self, path):
         path = self._resolve_path(path)
@@ -115,15 +149,15 @@ class VFS:
             if component == "..":
                 if current.parent is not None:
                     current = current.parent
+            else:
+                child = current.get_child(component)
+                if isinstance(child, Directory):
+                    current = child
                 else:
-                    child = current.get_child(component)
-                    if isinstance(child, Directory):
-                        current = child
-                    else:
-                        return None
+                    return None
         return current
 
-    def cd(self, path):
+    def cd(self, path) -> bool:
         if not path:
             return False
         full_path = self._resolve_path(path)
@@ -144,12 +178,18 @@ class VFS:
         path_parts = []
         current = self.current_dir
 
+        if current == self.root:
+            self.current_path = "/"
+            return
+
         while current is not None and current != self.root:
             path_parts.append(current.name)
+            current = current.parent
 
         self.current_path = "/" + "/".join(reversed(path_parts)) + "/"
+        print(self.current_path)
 
-    def mkdir(self, dir_name):
+    def mkdir(self, dir_name: str) -> bool:
         if not dir_name:
             return False
 
@@ -188,7 +228,7 @@ class VFS:
                     print("mounted path is not a dir")
                     return False
 
-                return os.listdir(real_full_path)
+                print(os.listdir(real_full_path))
         items = []
         for name, child in self.current_dir.children.items():
             if isinstance(child, Directory):
@@ -201,7 +241,7 @@ class VFS:
             if mount_dir == self.current_path.rstrip("/"):
                 items.append(f"{os.path.basename(mount_path)}/ [mounted]")
 
-        return items
+        print(*items)
 
     def mount(self, source, target):
         if not os.path.exists(source):
@@ -211,7 +251,7 @@ class VFS:
         target_path = self._resolve_path(target)
 
         for mount_path in self.mount_points:
-            if target.startswith(mount_path):
+            if mount_path.strip("/").endswith(target):
                 print(f"cant mount inside already mounted vfs: {mount_path}")
                 return False
 
@@ -221,16 +261,71 @@ class VFS:
         for component in components[:-1]:
             child = current.get_child(component)
             if not isinstance(child, Directory):
-                pass
+                new_dir = Directory(component, current)
+                current.add_child(new_dir)
+                current = new_dir
+            else:
+                current = child
 
+        self.mount_points[target_path] = source
+        print(f"mounted real path '{source}' to virtual path '{target_path}'")
+        return True
 
+    def unmount(self, path):
+        target_path = self._resolve_path(path)
 
+        if target_path in self.mount_points:
+            del self.mount_points[target_path]
+            print(f"unmounted: {target_path}")
+            return True
+        else:
+            print(f"no mount point at: {target_path}")
+            return False
+
+    def save_to_file(self, file_name):
+        data = {
+            "root": self.root.to_dict(),
+            "current_path": self.current_path,
+            "mount_points": self.mount_points
+        }
+
+        try:
+            with open(file_name, "w") as f:
+                json.dump(data, f, indent=2)
+            print(f"vfs saved to {file_name}")
+            return True
+        except Exception as err:
+            print(f"Error saving vfs {err}")
+
+    def load_from_file(self, file_name):
+        if not os.path.exists(file_name):
+            print(f"file not found: {file_name}")
+            return False
+
+        try:
+            with open(file_name, "r") as file:
+                data = json.load(file)
+
+            self.root = Directory.from_dict(data["root"])
+            self.current_path = data["current_path"]
+            self.mount_points = data.get("mount_points", {})
+
+            self.current_dir = self._find_dir(self.current_path)
+            if not self.current_dir:
+                print(f"Warning: Current path not found after load, resetting to root")
+                self.current_dir = self.root
+                self.current_path = "/"
+
+            print(f"vfs loaded from {file_name}")
+            return True
+        except Exception as err:
+            print(f"error loading vfs {err}")
+            return False
+
+    def upd_prompt(self) -> str:
+        return f"VFS:{self.current_path}>"
 
 
 if __name__ == "__main__":
     vfs = VFS()
-    print("Virtual File System Initialized")
-    while True:
-        parser = cli()
-        args = parser.parse_args()
-        vfs.run(args)
+    vfs.run()
