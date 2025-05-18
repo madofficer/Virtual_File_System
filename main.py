@@ -114,6 +114,8 @@ class VFS:
                         self.cd(args.path)
                     case "mkdir":
                         self.mkdir(args.dir_name)
+                    case "rm":
+                        self.rm(args.dir_name)
                     case "mount":
                         self.mount(args.source, args.target)
                     case "unmount":
@@ -158,7 +160,7 @@ class VFS:
                     return None
         return current
 
-    def cd(self, path) -> bool:
+    def cd(self, path, inner=False) -> bool:
         if not path:
             return False
 
@@ -168,7 +170,8 @@ class VFS:
             self._update_current_path()
             return True
         else:
-            print(f"dir not found {path}")
+            if not inner:
+                print(f"dir not found {path}")
             return False
 
     def _update_current_path(self):
@@ -184,9 +187,9 @@ class VFS:
             current = current.parent
 
         self.current_path = "/" + "/".join(reversed(path_parts)) + "/"
-        print(self.current_path)
+        # print(self.current_path)
 
-    def mkdir(self, dir_name: str) -> bool:
+    def mkdir(self, dir_name: str, mounted=False) -> bool:
         if not dir_name:
             return False
 
@@ -195,8 +198,33 @@ class VFS:
             return False
 
         new_dir = Directory(dir_name, self.current_dir)
+        new_dir.mounted = mounted
         self.current_dir.add_child(new_dir)
         return True
+
+    def rm(self, path: str, mounted=False) -> bool:
+        if not path:
+            return False
+
+        abs_path = self._resolve_path(path)
+
+        target = self._find_dir(abs_path)
+        if not target:
+            print("dir not found")
+            return False
+        if target.mounted:
+            print("cant rm mounted dir")
+            return False
+
+        parent = target.parent
+        if parent == "root/":
+            print("cant rm root")
+            return False
+
+        if isinstance(target, (File, Directory)):
+            parent.remove_child(target.name)
+            if not mounted:
+                print(f"{target.__class__.__name__} removed [{abs_path}]")
 
     def touch(self, file_name, content=""):
         if not file_name:
@@ -249,7 +277,7 @@ class VFS:
         original_dir = self.current_dir
 
         try:
-            if not self.cd(target):
+            if not self.cd(target, inner=True):
                 print('target dir doesnt exists')
                 return False
 
@@ -267,11 +295,11 @@ class VFS:
                 self.current_dir = mount_point
                 if rel_path:
                     for part in rel_path.split(os.sep):
-                        if not self.cd(part):
-                            if not self.mkdir(part):
+                        if not self.cd(part, inner=True):
+                            if not self.mkdir(part, mounted=True):
                                 print(f"Failed to create directory: {part}")
                                 return False
-                            self.cd(part)
+                            self.cd(part, inner=True)
 
                 for file_name in files:
                     if file_name not in self.current_dir.children:
@@ -292,9 +320,11 @@ class VFS:
 
     def unmount(self, path):
         target_path = self._resolve_path(path)
-
-        if target_path in self.mount_points:
-            del self.mount_points[target_path]
+        target = self._find_dir(target_path)
+        if not target: return False
+        if target.mounted and not target.parent.mounted:
+            target.mounted = False
+            self.rm(target_path, True)
             print(f"unmounted: {target_path}")
             return True
         else:

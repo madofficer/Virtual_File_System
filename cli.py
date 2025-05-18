@@ -23,6 +23,9 @@ def cli():
     mkdir_parser = subparser.add_parser("mkdir", help="make dir")
     mkdir_parser.add_argument("dir_name", metavar="string")
 
+    rm_parser = subparser.add_parser("rm", help="remove dir")
+    rm_parser.add_argument("dir_name", metavar="string")
+
     touch_parser = subparser.add_parser("touch", help="create file")
     touch_parser.add_argument("file_name", help="file name")
     touch_parser.add_argument("content", default="", help="file content")
