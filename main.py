@@ -38,8 +38,9 @@ class Directory:
         self.name = name
         self.created_at = datetime.now().isoformat()
         self.updated_at = datetime.now().isoformat()
-        self.parent = parent
+        self.parent: Directory | None = parent
         self.children = {}
+        self.mounted = False
 
     def to_dict(self):
         return {
@@ -160,11 +161,7 @@ class VFS:
     def cd(self, path) -> bool:
         if not path:
             return False
-        full_path = self._resolve_path(path)
-        for mount_path in self.mount_points:
-            if full_path.startswith(mount_path):
-                print("cant cd to mounted dir")
-                return False
+
         target_dir = self._find_dir(path)
         if target_dir:
             self.current_dir = target_dir
@@ -243,33 +240,55 @@ class VFS:
 
         print(*items)
 
-    def mount(self, source, target):
-        if not os.path.exists(source):
-            print(f"source path is not exist: {source}")
+    def mount(self, source: str, target: str) -> bool:
+        if not os.path.isdir(source):
+            print(f"source is not a directory: {source}")
             return False
-        source = os.path.abspath(source)
-        target_path = self._resolve_path(target)
 
-        for mount_path in self.mount_points:
-            if mount_path.strip("/").endswith(target):
-                print(f"cant mount inside already mounted vfs: {mount_path}")
+        original_path = self.current_path
+        original_dir = self.current_dir
+
+        try:
+            if not self.cd(target):
+                print('target dir doesnt exists')
                 return False
 
-        components = [c for c in target_path.split("/") if c]
-        current = self.root
+            if self.current_dir.mounted:
+                print("Cant mount into already mounted dir")
+                return False
+            mount_point = self.current_dir
+            self.current_dir.mounted = True
 
-        for component in components[:-1]:
-            child = current.get_child(component)
-            if not isinstance(child, Directory):
-                new_dir = Directory(component, current)
-                current.add_child(new_dir)
-                current = new_dir
-            else:
-                current = child
+            for root, dirs, files in os.walk(source):
+                rel_path = os.path.relpath(root, source)
+                if rel_path == '.':
+                    rel_path = ''
 
-        self.mount_points[target_path] = source
-        print(f"mounted real path '{source}' to virtual path '{target_path}'")
-        return True
+                self.current_dir = mount_point
+                if rel_path:
+                    for part in rel_path.split(os.sep):
+                        if not self.cd(part):
+                            if not self.mkdir(part):
+                                print(f"Failed to create directory: {part}")
+                                return False
+                            self.cd(part)
+
+                for file_name in files:
+                    if file_name not in self.current_dir.children:
+                        file_path = os.path.join(root, file_name)
+                        try:
+                            with open(file_path, 'r') as f:
+                                content = f.read()
+                            self.touch(file_name, f"[Mounted] {content[:100]}...")
+                        except Exception as e:
+                            self.touch(file_name, f"[Mounted file: {file_path}]")
+
+            self.mount_points[self._resolve_path(target)] = source
+            return True
+
+        finally:
+            self.current_path = original_path
+            self.current_dir = original_dir
 
     def unmount(self, path):
         target_path = self._resolve_path(path)
